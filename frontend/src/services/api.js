@@ -31,10 +31,15 @@ export async function verifyDocument(text, filename) {
   if (!text || !filename) {
     throw new Error('Missing document text or filename')
   }
+  // The backend has a 25s hard server-side cap. The frontend cap is 28s so
+  // the user sees a clean "timeout" error instead of the connection being
+  // cut by Render. If the backend returns early with a partial response
+  // (which it now does on budget exhaustion), the response is still valid
+  // and the results screen will render whatever claims finished.
   const { data } = await api.post(
     '/api/verify',
     { text, filename },
-    { timeout: 120_000 }
+    { timeout: 28_000 }
   )
   return data
 }

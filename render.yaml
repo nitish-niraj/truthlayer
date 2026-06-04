@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: truthlayer-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: FRONTEND_URL
+        value: https://truthlayernitish.vercel.app
+      - key: MAX_CLAIMS
+        value: "20"
+      - key: MAX_FILE_SIZE_MB
+        value: "10"
+      - key: MAX_SEARCH_RESULTS
+        value: "5"
+      - key: SEARCH_TIMEOUT_SECONDS
+        value: "8"
+      - key: CLAIM_EXTRACTION_TIMEOUT_SECONDS
+        value: "20"
+      - key: CLAIM_EXTRACTION_MAX_TOKENS
+        value: "2048"
+      - key: CLAIM_EXTRACTION_TEMPERATURE
+        value: "0.1"
+      - key: VERIFY_HARD_TIMEOUT_SECONDS
+        value: "25"
+      - key: VERIFY_MAX_INPUT_CHARS
+        value: "6000"
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false

@@ -265,10 +265,11 @@ def test_performance_logging_emits_timings(monkeypatch, caplog):
         asyncio.run(verify_document("doc", "doc.pdf"))
 
     messages = " | ".join(r.message for r in caplog.records)
-    assert "Document received" in messages
-    assert "Claims extracted: 2" in messages
-    assert "Verification started" in messages
-    assert "Verification completed:" in messages
+    assert "VERIFY REQUEST RECEIVED" in messages
+    assert "CLAIM EXTRACTION FINISHED" in messages
+    assert "2 claims" in messages
+    assert "VERIFICATION STARTED" in messages
+    assert "VERIFICATION COMPLETED" in messages
     assert "total=2" in messages
     assert "verified=2" in messages
     assert "inaccurate=0" in messages
@@ -278,4 +279,45 @@ def test_performance_logging_emits_timings(monkeypatch, caplog):
 
 def test_max_concurrent_claims_constant():
     # Sanity check — if someone bumps the cap, they should know.
-    assert MAX_CONCURRENT_CLAIMS == 5
+    # Phase 12: lowered from 5 to 3 to stay under Render's 30s free-tier
+    # proxy timeout on a typical 5-claim document.
+    assert MAX_CONCURRENT_CLAIMS == 3
+
+
+def test_hard_timeout_returns_partial_results(monkeypatch):
+    """When the hard timeout elapses mid-pipeline, we ship the claims that
+    have finished and replace the rest with defensive fallbacks."""
+    claims = [_claim(f"Claim {i}") for i in range(4)]
+
+    async def fake_extract(_text):
+        return claims
+
+    async def slow_verdict(_claim, _evidence, _status=None, _metrics=None):
+        # Sleep longer than the budget we will pass.
+        await asyncio.sleep(2.0)
+        from models.schemas import ClaimVerification, VerdictType
+        return ClaimVerification(
+            verdict=VerdictType.verified,
+            explanation="ok",
+            correct_fact="",
+            source_url="https://x",
+        )
+
+    def fake_search(_claim, metrics=None):
+        return SearchOutcome(status=SearchStatus.SUCCESS, results=_evidence())
+
+    monkeypatch.setattr(verification_pipeline, "extract_claims", fake_extract)
+    monkeypatch.setattr(
+        verification_pipeline, "search_claim_with_status", fake_search
+    )
+    monkeypatch.setattr(verification_pipeline, "generate_verdict", slow_verdict)
+
+    # 0.1s budget guarantees the per-claim stage cannot complete in time.
+    result = asyncio.run(verify_document("doc", "doc.pdf", hard_timeout=0.1))
+
+    # We still get a valid shape with 4 claims (3 fallback + 1 maybe-finished).
+    assert result.summary.total == 4
+    assert all(c.id in (1, 2, 3, 4) for c in result.claims)
+    # At least one claim should be a defensive fallback.
+    fallbacks = [c for c in result.claims if "Unable to verify" in c.explanation]
+    assert len(fallbacks) >= 1

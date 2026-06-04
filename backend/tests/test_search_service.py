@@ -180,4 +180,4 @@ def test_tavily_called_with_expected_kwargs(monkeypatch):
     assert kwargs["include_answer"] is False
     assert kwargs["include_raw_content"] is False
     assert kwargs["max_results"] == pytest.approx(5)
-    assert kwargs["timeout"] == pytest.approx(15)
+    assert kwargs["timeout"] == pytest.approx(8)
