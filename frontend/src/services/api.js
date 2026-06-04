@@ -70,19 +70,51 @@ export async function getVerifyStatus(job_id) {
  * onProgress so the UI can advance its stepper as the server reports
  * progress. Throws on 'failed' status; returns the result on
  * 'completed' or 'partial'.
+ *
+ * Resilient to transient network errors and 404s (which can happen if the
+ * Render worker restarts mid-run and clears the in-memory job store): a
+ * single transient failure is logged and the loop retries up to
+ * ``maxConsecutiveErrors`` times in a row before surfacing a hard error.
+ * This prevents the user from being kicked to the error screen by a brief
+ * network blip or a worker recycle on Render's free tier.
  */
 export async function pollVerifyUntilDone(job_id, {
   intervalMs = 1500,
   timeoutMs = 120_000,
   onProgress,
+  maxConsecutiveErrors = 5,
 } = {}) {
   const deadline = Date.now() + timeoutMs
+  let consecutiveErrors = 0
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (Date.now() > deadline) {
       throw new Error('Analysis timed out. Please try again.')
     }
-    const payload = await getVerifyStatus(job_id)
+    let payload
+    try {
+      payload = await getVerifyStatus(job_id)
+      consecutiveErrors = 0
+    } catch (err) {
+      consecutiveErrors += 1
+      const status = err?.response?.status
+      // 404 means the job_id is gone (Render worker recycled and lost the
+      // in-memory store). One more poll attempt before giving up so we
+      // don't bail out on a transient race.
+      if (status === 404 && consecutiveErrors >= 2) {
+        throw new Error(
+          'The analysis job was lost (server restarted). Please upload again.',
+        )
+      }
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        throw new Error(
+          'Lost connection to the verification server. Please try again.',
+        )
+      }
+      // Wait a beat and try again.
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      continue
+    }
     onProgress?.(payload)
     if (payload.status === 'completed' || payload.status === 'partial') {
       return payload.result

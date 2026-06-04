@@ -15,6 +15,7 @@ Phase 11.5 additions:
   the model is actually returning, without dumping the whole response.
 """
 
+import asyncio
 import json
 import re
 import time
@@ -162,7 +163,8 @@ async def extract_claims(text: str) -> List[ExtractedClaim]:
 
     try:
         client = get_llm_client()
-        response = client.chat.completions.create(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model=MODEL_NAME,
             messages=[{"role": "user", "content": CLAIM_EXTRACTION_PROMPT.format(text=truncated)}],
             temperature=CLAIM_EXTRACTION_TEMPERATURE,

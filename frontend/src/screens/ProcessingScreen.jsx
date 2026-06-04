@@ -67,6 +67,9 @@ function getApiErrorMessage(err) {
     return 'Analysis timed out. Please try again or use a smaller document.'
   }
   if (err?.code === 'ERR_NETWORK') return 'Server unavailable'
+  if (err?.response?.status === 404) {
+    return 'The analysis job was lost (server restarted). Please upload again.'
+  }
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.message) return err.message
   return 'Unable to complete analysis.'

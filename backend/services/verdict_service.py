@@ -176,7 +176,8 @@ async def _call_llm_with_retries(
         try:
             async with VERDICT_SEMAPHORE:
                 client = get_llm_client()
-                response = client.chat.completions.create(
+                response = await asyncio.to_thread(
+                    client.chat.completions.create,
                     model=MODEL_NAME,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=VERDICT_TEMPERATURE,
