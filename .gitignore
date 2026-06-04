@@ -1,0 +1,78 @@
+# ────────────────────────────
+# Python
+# ────────────────────────────
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+venv-*/
+.env-venv/
+
+# ────────────────────────────
+# Environment & Secrets
+# ────────────────────────────
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*.local
+
+# ────────────────────────────
+# Node / Frontend
+# ────────────────────────────
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+.npm
+.eslintcache
+
+# ────────────────────────────
+# IDEs
+# ────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# ────────────────────────────
+# OS
+# ────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ────────────────────────────
+# Logs
+# ────────────────────────────
+*.log
+logs/
+
+# ────────────────────────────
+# Local test artifacts
+# (kept out of VCS — safe to delete and regenerate)
+# ────────────────────────────
+backend/uvicorn.log
+backend/uvicorn.err
+backend/verify_request.json
+
+# ────────────────────────────
+# Misc
+# ────────────────────────────
+*.bak
+*.tmp
+*.orig
+*.rej
+.pyc.test
+.turbo
+.parcel-cache/

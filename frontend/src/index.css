@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #0A0C0F;
+  --bg-surface: #111318;
+  --bg-elevated: #1A1D24;
+  --bg-border: #2A2D36;
+
+  --text-primary: #F0F2F5;
+  --text-secondary: #8B909E;
+  --text-muted: #4A4F5E;
+
+  --accent: #F5A623;
+  --accent-hover: #FFC155;
+  --accent-dim: #F5A62322;
+
+  --verified: #22C55E;
+  --verified-bg: #22C55E14;
+
+  --inaccurate: #F59E0B;
+  --inaccurate-bg: #F59E0B14;
+
+  --false: #EF4444;
+  --false-bg: #EF444414;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-dim); }
+  50%      { box-shadow: 0 0 0 8px transparent; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.animate-pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
+.animate-slide-up   { animation: slideUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade-in    { animation: fadeIn 0.3s ease-out both; }
