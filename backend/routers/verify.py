@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from models.schemas import (
     ClaimEvidence,
@@ -12,7 +12,9 @@ from models.schemas import (
     VerifyRequest,
     VerifyResponse,
 )
+from services import job_store
 from services.claim_service import extract_claims
+from services.job_store import JobStatus, store as job_store_singleton
 from services.pdf_service import extract_text_from_pdf
 from services.search_service import search_claim
 from services.verdict_service import generate_verdict
@@ -47,6 +49,140 @@ async def upload_file(file: UploadFile = File(...)):
     return await extract_text_from_pdf(file)
 
 
+# ---------------------------------------------------------------------------
+# Background-job verify (Phase 13)
+# ---------------------------------------------------------------------------
+# The synchronous /api/verify endpoint was killed by Render's 30s free-tier
+# proxy timeout whenever the LLM cold-start pushed the pipeline past that
+# wall. The new pattern: POST returns a job_id in <100ms, the client polls
+# GET /api/verify/{job_id} for progress and the final result. The actual
+# work runs as a background task that is allowed up to 120s (well past the
+# Render 30s HTTP window, but still bounded for safety).
+JOB_VERIFY_WALL_BUDGET_SECONDS = 120.0
+
+
+@router.post(
+    "/verify",
+    response_model=None,
+    summary="Start a background verification job (returns job_id immediately)",
+    description=(
+        "Accepts a JSON body ``{text, filename}`` and starts a background "
+        "verification job. Returns ``{job_id, status: \"pending\"}`` in "
+        "less than 100ms. The client should poll ``GET /api/verify/{job_id}`` "
+        "every 1-2 seconds until ``status`` becomes ``completed``, ``partial``, "
+        "or ``failed``. The ``partial`` terminal state means the pipeline "
+        "exceeded its wall-clock budget and the response contains the claims "
+        "that did finish. This is the new pattern that survives Render's 30s "
+        "free-tier proxy timeout — the old synchronous endpoint that blocked "
+        "the request until the pipeline finished was killed whenever the LLM "
+        "cold-start pushed the pipeline past that wall."
+    ),
+    status_code=202,
+    responses={
+        202: {"description": "Job accepted; body is {job_id, status}"},
+        400: {"model": ErrorResponse, "description": "`text` is required"},
+    },
+)
+async def start_verify(req: VerifyRequest, background_tasks: BackgroundTasks):
+    if not req.text:
+        raise HTTPException(status_code=400, detail="`text` is required")
+    job = job_store_singleton.create()
+    background_tasks.add_task(
+        _run_verify_job, job.job_id, req.text, req.filename
+    )
+    return {"job_id": job.job_id, "status": JobStatus.PENDING.value}
+
+
+@router.get(
+    "/verify/{job_id}",
+    response_model=None,
+    summary="Poll a background verification job for status and result",
+    description=(
+        "Returns the current state of a job created by ``POST /api/verify``. "
+        "The ``status`` field is one of: ``pending`` (not started yet), "
+        "``running`` (in progress, see ``progress`` for claim counts), "
+        "``completed`` (full result in ``result``), ``partial`` (budget "
+        "exceeded; partial result in ``result``), or ``failed`` (see "
+        "``error``). Results are kept in memory for 10 minutes after "
+        "creation."
+    ),
+    responses={
+        200: {"description": "Current job state"},
+        404: {"model": ErrorResponse, "description": "No such job_id (expired or never existed)"},
+    },
+)
+async def get_verify_job(job_id: str):
+    job = job_store_singleton.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    return job.to_dict()
+
+
+async def _run_verify_job(job_id: str, text: str, filename: str) -> None:
+    """Background-task entry point. Runs the pipeline and updates the job."""
+    from core.config import settings
+    from core.logger import logger
+
+    job_store_singleton.mark_running(job_id)
+
+    async def _progress(fields: dict) -> None:
+        job_store_singleton.update_progress(job_id, **fields)
+
+    try:
+        result = await verify_document(
+            text=text,
+            filename=filename,
+            hard_timeout=JOB_VERIFY_WALL_BUDGET_SECONDS,
+            progress_cb=_progress,
+        )
+        if result.summary.total == 0:
+            job_store_singleton.mark_completed(job_id, result.model_dump())
+        else:
+            # Treat any zero-claim-result or budget-exceeded as partial. The
+            # pipeline itself signals partial via the per-claim explanation
+            # note; we mirror that by re-checking whether any claim carries
+            # the partial note.
+            from services.verification_pipeline import PARTIAL_RESULT_NOTE
+            is_partial = any(PARTIAL_RESULT_NOTE in (c.explanation or "") for c in result.claims)
+            if is_partial:
+                job_store_singleton.mark_partial(job_id, result.model_dump())
+            else:
+                job_store_singleton.mark_completed(job_id, result.model_dump())
+    except Exception as exc:  # defensive — verify_document already swallows
+        logger.exception("Background verify job %s crashed: %s", job_id, exc)
+        job_store_singleton.mark_failed(job_id, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Legacy / synchronous helpers (kept for tests and direct API access). These
+# are NOT registered under /api/verify anymore (the new background-job route
+# replaced them) but are still exposed under /api/verify-sync for diagnostic
+# use and integration tests.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/verify-sync",
+    response_model=VerifyResponse,
+    summary="[Internal] Synchronous verify — DEPRECATED, use POST /api/verify",
+    description=(
+        "Synchronous version of /api/verify. Blocks until the pipeline "
+        "finishes. Suitable for local development and integration tests "
+        "only. WILL time out on Render's free tier for any non-trivial "
+        "document. Prefer the async /api/verify + /api/verify/{job_id} "
+        "pattern in production."
+    ),
+    responses={
+        200: {"description": "Verification report (summary + per-claim verdicts)"},
+        400: {"model": ErrorResponse, "description": "`text` is required"},
+    },
+)
+async def verify_sync(req: VerifyRequest):
+    if not req.text:
+        raise HTTPException(status_code=400, detail="`text` is required")
+    return await verify_document(req.text, req.filename)
+
+
 @router.post(
     "/extract-claims",
     response_model=list[ExtractedClaim],
@@ -64,37 +200,6 @@ async def upload_file(file: UploadFile = File(...)):
 )
 async def extract_claims_endpoint(req: ExtractClaimsRequest):
     return await extract_claims(req.text)
-
-
-@router.post(
-    "/verify",
-    response_model=VerifyResponse,
-    summary="Run the complete TruthLayer verification pipeline on document text",
-    description=(
-        "End-to-end orchestrator (Phase 6). Composes the per-claim services:\n\n"
-        "1. `extract_claims(text)` — Kimi K2.6 (thinking off, 2048 max tokens, 60s timeout) extracts structured `ExtractedClaim` objects from the text.\n"
-        "2. For each claim (concurrency cap = 5 via `asyncio.Semaphore`):\n"
-        "   - `search_claim(claim)` — Tavily (advanced, top 5, dedupe, tier ranking) returns ranked `SearchResult` evidence.\n"
-        "   - `generate_verdict(claim, evidence)` — Kimi K2.6 (thinking off, 1024 tokens) returns a `ClaimVerification`.\n"
-        "3. Per-claim results are summarised into `SummaryStats {total, verified, inaccurate, false}` and ids 1..N are assigned.\n\n"
-    "Latency scales with claim count: per-claim wall time ≈ Tavily search + LLM verdict, capped at `MAX_CLAIMS=20` "
-    "claims and 3 concurrent pipelines (Phase 12: lowered from 5 to stay under Render's 30s free-tier proxy timeout). "
-    "The pipeline has a hard server-side timeout (`VERIFY_HARD_TIMEOUT_SECONDS`, default 25s) — if it elapses, "
-    "the response ships with whatever claims have finished and the rest are marked as 'Unable to verify claim.'.\n\n"
-        "Failure policy: never returns 500. Empty text → 400. Zero claims extracted → 200 with a valid `VerifyResponse` "
-        "of zero counts. Per-claim failures are absorbed and returned as a defensive-fallback `VerifiedClaim` "
-        "(verdict='false', explanation='Unable to verify claim.'). 500 is reserved for truly unhandled router-level errors."
-    ),
-    responses={
-        200: {"description": "Verification report (summary + per-claim verdicts, possibly empty claims list)"},
-        400: {"model": ErrorResponse, "description": "`text` is required"},
-        500: {"model": ErrorResponse, "description": "Reserved for unhandled router-level errors"},
-    },
-)
-async def verify(req: VerifyRequest):
-    if not req.text:
-        raise HTTPException(status_code=400, detail="`text` is required")
-    return await verify_document(req.text, req.filename)
 
 
 @router.post(

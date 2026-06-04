@@ -3,12 +3,13 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import settings
 from core.logger import logger
 from routers.verify import router as verify_router
+from services.job_store import store as job_store
 
 app = FastAPI(title="TruthLayer API", description="Automated PDF fact-checking backend")
 
@@ -18,10 +19,10 @@ app = FastAPI(title="TruthLayer API", description="Automated PDF fact-checking b
 # ---------------------------------------------------------------------------
 # Note: the verify pipeline can take 20-30 s on a free Render instance. Render
 # will close the upstream socket if the response hasn't started streaming
-# before its HTTP timeout. When that happens the browser sees "no response"
-# and blames CORS, even though the headers would have been correct. We mitigate
-# this in routers/verify.py with a server-side hard timeout that returns a
-# partial result before Render kills the connection.
+# before its HTTP timeout. The /api/verify endpoint was migrated to a
+# background-job pattern in Phase 13 — POST returns a job_id in <100ms and
+# the actual work runs in a background task — so this concern only applies
+# to /api/upload and the legacy /api/verify-sync endpoint now.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -39,9 +40,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Request-timing + access log middleware
 # ---------------------------------------------------------------------------
-# Emits a single structured log line per request with method, path, status,
-# and elapsed seconds. Helps diagnose "where did the request spend its time"
-# when Render logs are the only signal we have.
 class RequestTimingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("x-request-id") or uuid4().hex[:12]
@@ -117,6 +115,30 @@ async def options_handler(path: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Favicon — returns 204 No Content so the browser stops spamming the
+# Network tab with 404s for /favicon.ico. We don't ship an icon yet.
+# ---------------------------------------------------------------------------
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: start the job-store eviction sweeper on startup.
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def _startup() -> None:
+    await job_store.start_sweeper()
+    logger.info("APP STARTUP COMPLETE | FRONTEND_URL=%s", settings.FRONTEND_URL)
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    await job_store.stop_sweeper()
+    logger.info("APP SHUTDOWN COMPLETE")
+
+
+# ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(verify_router)
@@ -124,4 +146,12 @@ app.include_router(verify_router)
 
 @app.get("/")
 async def root():
-    return {"message": "TruthLayer backend. See /api/health"}
+    return {
+        "message": "TruthLayer backend. See /api/health",
+        "endpoints": {
+            "POST /api/upload": "Extract text from a PDF (synchronous, <5s)",
+            "POST /api/verify": "Start a background verification job (returns job_id in <100ms)",
+            "GET /api/verify/{job_id}": "Poll for job status and result",
+            "GET /api/health": "Liveness probe",
+        },
+    }

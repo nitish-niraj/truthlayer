@@ -11,7 +11,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 
-import { verifyDocument } from '../services/api'
+import { pollVerifyUntilDone, startVerify } from '../services/api'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import { fadeIn, slideUp } from '../lib/motion'
@@ -44,12 +44,15 @@ const STEPS = [
 ]
 
 const STEP_ADVANCE_MS = [2000, 3000, 4000]
-const PROGRESS_DURATION_MS = 30_000
+const PROGRESS_DURATION_MS = 45_000
 const PROGRESS_TICK_MS = 100
 const MESSAGE_ROTATE_MS = 3500
 const LONG_HINT_MS = 30_000
 const COMPLETION_PAUSE_MS = 600
-const REQUEST_TIMEOUT_MS = 120_000
+// The polling loop in services/api.js bounds the total wait at 130s; the
+// progress bar now reflects that wider window so the user sees smooth
+// 0-100% movement instead of a stalled bar.
+const POLL_TIMEOUT_MS = 130_000
 
 const STATUS_MESSAGES = [
   'Parsing PDF structure...',
@@ -164,10 +167,33 @@ export default function ProcessingScreen({
 
       if (skipRequest) return
 
-      // The actual API call
-      verifyDocument(uploadData.text, uploadData.filename)
+      // The actual API call — start a background job and poll for the
+      // result. The POST itself returns in <100ms with a job_id; the heavy
+      // work runs server-side and we poll every 1.5s. The previous
+      // synchronous /api/verify was killed by Render's 30s proxy timeout
+      // whenever the LLM cold-start pushed the pipeline past that wall.
+      let jobId = null
+      startVerify(uploadData.text, uploadData.filename)
+        .then(({ job_id }) => {
+          if (cancelledRef.current) return null
+          jobId = job_id
+          return pollVerifyUntilDone(job_id, {
+            intervalMs: 1500,
+            timeoutMs: 130_000,
+            onProgress: (payload) => {
+              if (cancelledRef.current) return
+              // Map server stage onto the stepper. Extraction done -> step 1.
+              // Verification running -> step 2/3. Done -> step 3.
+              const stage = payload?.progress?.stage
+              if (stage === 'extraction') setActiveStep(1)
+              else if (stage === 'verification') setActiveStep(2)
+              else if (stage === 'claim_done') setActiveStep(2)
+              else if (stage === 'done') setActiveStep(3)
+            },
+          })
+        })
         .then((data) => {
-          if (cancelledRef.current) return
+          if (cancelledRef.current || !data) return
           setAllComplete(true)
           setActiveStep(STEPS.length - 1)
           setProgress(100)

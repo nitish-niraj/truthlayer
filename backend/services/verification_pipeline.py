@@ -1,4 +1,4 @@
-"""End-to-end verification pipeline (Phase 6 + Phase 11.5 + Phase 12).
+"""End-to-end verification pipeline (Phase 6 + Phase 11.5 + Phase 12 + Phase 13).
 
 Orchestrates the per-claim services into a single document-level workflow:
 
@@ -23,8 +23,8 @@ Phase 11.5 additions:
   pipeline simply delegates the call.
 
 Phase 12 additions (production hardening for Render free tier):
-- Concurrency cap reduced from 5 to 3 so we stay under Render's ~30s
-  upstream HTTP timeout on a typical 5-claim document.
+- Concurrency cap of 3 to stay under Render's ~30s upstream HTTP timeout
+  on a typical 5-claim document.
 - Per-claim hard timeout via ``asyncio.wait_for`` so a single hung claim
   cannot block the whole response.
 - Input text is truncated to ``settings.VERIFY_MAX_INPUT_CHARS`` before
@@ -35,17 +35,25 @@ Phase 12 additions (production hardening for Render free tier):
   finished are returned (id-renumbered 1..N) and the rest are
   defensive-fallback "Unable to verify claim." rows.
 - Diagnostic INFO logs at every stage boundary.
+
+Phase 13 additions (background-job pattern):
+- ``verify_document`` accepts an optional ``progress_cb`` coroutine
+  callback that is invoked after each stage so the job store can publish
+  live progress to polling clients.
+- An additional ``deadline`` parameter lets the router cap wall time
+  including the LLM extraction stage (which used to be unbounded).
+- ``extract_claims`` is now wrapped in ``asyncio.wait_for`` so a hung LLM
+  call cannot stall the background task past the deadline.
 """
 
 import asyncio
 import time
-from typing import List
+from typing import Any, Awaitable, Callable, List, Optional
 
 from core.config import settings
 from core.logger import logger
 from core.metrics import RunMetrics
 from models.schemas import (
-    ClaimType,
     ExtractedClaim,
     SummaryStats,
     VerdictType,
@@ -66,15 +74,19 @@ MAX_CONCURRENT_CLAIMS = 3
 # its place, so the rest of the document is not blocked.
 PER_CLAIM_TIMEOUT_SECONDS = 15.0
 
+# Cap on the LLM call inside extract_claims. Cold-start on a free Render
+# instance can take 25-35s for the first request; we hard-cap so the
+# background task never exceeds its deadline.
+CLAIM_EXTRACTION_STAGE_TIMEOUT_SECONDS = 20.0
+
 PIPELINE_FALLBACK_EXPLANATION = "Unable to verify claim."
 
-# Returned to the client when the overall verify_document call times out and
-# we ship a partial result. The UI should treat this as informational, not an
-# error — the document was processed, just not all of it.
 PARTIAL_RESULT_NOTE = (
     "Analysis completed with partial results due to a server-side time "
     "budget. Some claims may not have been verified."
 )
+
+ProgressCb = Callable[[dict], Awaitable[None]]
 
 
 def _defensive_fallback_claim(claim: ExtractedClaim) -> VerifiedClaim:
@@ -178,43 +190,20 @@ def _truncate_input(text: str) -> str:
     return text
 
 
-async def _gather_with_budget(
-    coros: List[asyncio.Task], budget_seconds: float
-) -> tuple[list, list]:
-    """Run ``coros`` with a hard wall-clock cap.
-
-    Returns ``(done, pending)`` where ``pending`` is the list of unfinished
-    tasks at the deadline. Pending tasks are cancelled so we never leak a
-    coroutine past the response.
-    """
-    gathered = asyncio.gather(*coros, return_exceptions=False)
+async def _emit(progress_cb: Optional[ProgressCb], **fields: Any) -> None:
+    if progress_cb is None:
+        return
     try:
-        results = await asyncio.wait_for(gathered, timeout=budget_seconds)
-        return results, []
-    except asyncio.TimeoutError:
-        # Cancel any in-flight work and return whatever's done so far. We
-        # don't rely on gather's internal cancellation — we cancel each task
-        # explicitly so a long-running LLM call releases its semaphore.
-        for task in coros:
-            if not task.done():
-                task.cancel()
-        # Give the loop one tick to actually cancel, then collect results.
-        done_results: list = []
-        for task in coros:
-            if task.done() and not task.cancelled():
-                try:
-                    done_results.append(task.result())
-                except Exception:
-                    done_results.append(None)
-            else:
-                done_results.append(None)
-        return done_results, [t for t in coros if not t.done()]
+        await progress_cb(fields)
+    except Exception as exc:
+        logger.warning("Progress callback raised: %s", exc)
 
 
 async def verify_document(
     text: str,
     filename: str,
-    hard_timeout: float | None = None,
+    hard_timeout: Optional[float] = None,
+    progress_cb: Optional[ProgressCb] = None,
 ) -> VerifyResponse:
     """Run the full verification pipeline on extracted document text.
 
@@ -224,16 +213,41 @@ async def verify_document(
     the claims that have already finished are returned and the remainder
     are emitted as defensive-fallback claims with a partial-result note in
     the explanation.
+
+    ``progress_cb`` is an optional coroutine invoked with keyword arguments
+    at every stage boundary (e.g. ``stage="extraction"``, ``claims=4``).
+    Used by the background-job router to publish live progress to polling
+    clients. The callback is awaited but any exception in it is swallowed
+    so it cannot break the pipeline.
     """
     metrics = RunMetrics(filename=filename)
     metrics.start()
     logger.info("VERIFY REQUEST RECEIVED | file=%s | chars=%d", filename, len(text))
+    await _emit(progress_cb, stage="received", filename=filename, chars=len(text))
 
     truncated = _truncate_input(text)
 
+    budget = hard_timeout if hard_timeout is not None else settings.VERIFY_HARD_TIMEOUT_SECONDS
+    t_overall = time.perf_counter()
+
+    # Stage 1: claim extraction. Capped explicitly so a hung LLM call
+    # cannot block the background task past the deadline.
     t_extract_start = time.perf_counter()
+    remaining_for_extraction = max(
+        1.0,
+        min(CLAIM_EXTRACTION_STAGE_TIMEOUT_SECONDS, budget * 0.6),
+    )
     try:
-        claims = await extract_claims(truncated)
+        claims = await asyncio.wait_for(
+            extract_claims(truncated),
+            timeout=remaining_for_extraction,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "CLAIM EXTRACTION TIMEOUT | cap=%.1fs | returning empty result",
+            remaining_for_extraction,
+        )
+        claims = []
     except Exception as exc:
         logger.warning("extract_claims raised unexpectedly: %s", exc)
         claims = []
@@ -242,6 +256,12 @@ async def verify_document(
         "CLAIM EXTRACTION FINISHED | %d claims | %.2fs",
         len(claims),
         metrics.claim_extraction_seconds,
+    )
+    await _emit(
+        progress_cb,
+        stage="extraction",
+        claims=len(claims),
+        extraction_seconds=round(metrics.claim_extraction_seconds, 3),
     )
 
     if len(claims) > settings.MAX_CLAIMS:
@@ -262,8 +282,12 @@ async def verify_document(
             claims=[],
         )
 
-    logger.info("VERIFICATION STARTED | %d claims | concurrency=%d", len(claims), MAX_CONCURRENT_CLAIMS)
-    t_verify_start = time.perf_counter()
+    logger.info(
+        "VERIFICATION STARTED | %d claims | concurrency=%d",
+        len(claims),
+        MAX_CONCURRENT_CLAIMS,
+    )
+    await _emit(progress_cb, stage="verification", claims=len(claims), concurrency=MAX_CONCURRENT_CLAIMS)
 
     sem = asyncio.Semaphore(MAX_CONCURRENT_CLAIMS)
     tasks = [
@@ -271,17 +295,14 @@ async def verify_document(
         for i, c in enumerate(claims)
     ]
 
-    # Compute remaining wall budget for the per-claim gather stage. The
-    # extraction stage already consumed some time; subtract it from the
-    # hard cap so we never exceed the budget end-to-end.
-    elapsed_so_far = time.perf_counter() - t_verify_start + metrics.claim_extraction_seconds
-    budget = hard_timeout if hard_timeout is not None else settings.VERIFY_HARD_TIMEOUT_SECONDS
-    remaining = max(0.5, budget - elapsed_so_far)
+    # Remaining wall budget for the gather stage. Use the absolute deadline
+    # rather than a "remaining" so we never overshoot the cap even if
+    # extract_claims was faster than expected.
+    remaining = max(0.5, budget - (time.perf_counter() - t_overall))
+    results, pending = await _gather_with_budget_and_progress(
+        tasks, remaining, progress_cb, total_claims=len(claims)
+    )
 
-    results, pending = await _gather_with_budget(tasks, remaining)
-
-    # Replace any unfinished / None slots with defensive-fallback claims so
-    # the response shape is always valid.
     final_claims: List[VerifiedClaim] = []
     for claim, result in zip(claims, results):
         if result is None or isinstance(result, Exception):
@@ -292,7 +313,8 @@ async def verify_document(
         else:
             final_claims.append(result)
 
-    if pending:
+    is_partial = bool(pending)
+    if is_partial:
         logger.warning(
             "VERIFY HARD TIMEOUT | %d of %d claims did not finish in %.1fs; "
             "returning partial result",
@@ -306,9 +328,6 @@ async def verify_document(
                     f"{PIPELINE_FALLBACK_EXPLANATION} ({PARTIAL_RESULT_NOTE})"
                 )
 
-    verify_seconds = time.perf_counter() - t_verify_start
-    avg_per_claim = verify_seconds / max(len(claims), 1)
-
     for idx, vc in enumerate(final_claims, start=1):
         vc.id = idx
 
@@ -318,15 +337,72 @@ async def verify_document(
 
     logger.info(
         "VERIFICATION COMPLETED | total=%d verified=%d inaccurate=%d false=%d "
-        "| %.2fs (avg %.2fs/claim)",
+        "| %.2fs (avg %.2fs/claim) | partial=%s",
         summary.total,
         summary.verified,
         summary.inaccurate,
         summary.false,
         metrics.total_seconds,
-        avg_per_claim,
+        metrics.total_seconds / max(len(claims), 1),
+        is_partial,
     )
     metrics.log_summary()
     logger.info("VERIFY RESPONSE RETURNED | file=%s | claims=%d", filename, summary.total)
+    await _emit(
+        progress_cb,
+        stage="done",
+        partial=is_partial,
+        claims=summary.total,
+        total_seconds=round(metrics.total_seconds, 3),
+    )
 
     return VerifyResponse(filename=filename, summary=summary, claims=final_claims)
+
+
+async def _gather_with_budget_and_progress(
+    tasks: List[asyncio.Task],
+    budget_seconds: float,
+    progress_cb: Optional[ProgressCb],
+    total_claims: int,
+) -> tuple[list, list]:
+    """Run ``tasks`` with a hard wall-clock cap and report progress as they
+    finish. Returns ``(results_in_order, pending_tasks)``.
+    """
+    deadline = time.perf_counter() + budget_seconds
+    remaining_tasks = list(tasks)
+    results: list = [None] * len(tasks)
+    finished = 0
+
+    while remaining_tasks:
+        time_left = deadline - time.perf_counter()
+        if time_left <= 0:
+            break
+        done, pending = await asyncio.wait(
+            remaining_tasks,
+            timeout=time_left,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            try:
+                value = task.result()
+            except Exception as exc:
+                value = exc
+            results[tasks.index(task)] = value
+            finished += 1
+            await _emit(
+                progress_cb,
+                stage="claim_done",
+                done=finished,
+                total=total_claims,
+            )
+        remaining_tasks = list(pending)
+        if not pending:
+            break
+
+    pending_now = [t for t in remaining_tasks if not t.done()]
+    for task in pending_now:
+        task.cancel()
+    if pending_now:
+        # Allow cancellations to settle so event-loop state is clean.
+        await asyncio.sleep(0)
+    return results, pending_now
