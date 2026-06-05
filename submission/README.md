@@ -17,6 +17,16 @@ sources, and renders an evidence-backed verdict for each one.
 
 ---
 
+## Preview
+
+![TruthLayer product walkthrough](truth-layers.gif)
+
+A quick look at the full pipeline — upload a PDF, watch live claim
+extraction and web search, and review the per-claim verdict dashboard
+with the corrected facts.
+
+---
+
 ## Live Demo
 
 **[https://truthlayernitish.vercel.app](https://truthlayernitish.vercel.app)**
@@ -228,16 +238,6 @@ Pydantic models from `backend/models/schemas.py`.
 polls `/api/verify/{job_id}` every 1.5 s until the status becomes
 `completed`, `partial`, or `failed`. The final payload includes summary
 statistics and per-claim `VerifiedClaim` records.
-
----
-
-## Preview
-
-![TruthLayer product walkthrough](truth-layers.gif)
-
-A quick look at the full pipeline — upload a PDF, watch live claim
-extraction and web search, and review the per-claim verdict dashboard
-with the corrected facts.
 
 ---
 
