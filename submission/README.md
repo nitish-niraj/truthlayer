@@ -231,6 +231,16 @@ statistics and per-claim `VerifiedClaim` records.
 
 ---
 
+## Preview
+
+![TruthLayer product walkthrough](truth-layers.gif)
+
+A quick look at the full pipeline — upload a PDF, watch live claim
+extraction and web search, and review the per-claim verdict dashboard
+with the corrected facts.
+
+---
+
 ## Screenshots
 
 ### Home — Upload
