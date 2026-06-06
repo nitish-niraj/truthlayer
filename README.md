@@ -1,21 +1,10 @@
----
-
-## Preview
-
-![TruthLayer product walkthrough](truth-layers.gif)
-
-A quick look at the full pipeline — upload a PDF or an image, watch
-live claim extraction and web search, and review the per-claim
-evidence-backed verdict dashboard.
-
 <div align="center">
+
 # TruthLayer
 
 **AI-powered Fact Verification Platform for PDFs and Images**
 
-Upload a PDF **or an image** — TruthLayer extracts every factual
-claim, searches live web sources, and renders an evidence-backed
-verdict for each one.
+Upload a PDF **or an image** — TruthLayer extracts every factual claim, searches live web sources, and renders an evidence-backed verdict for each one.
 
 [![Status](https://img.shields.io/badge/status-v2.0-22C55E)](#)
 [![Backend](https://img.shields.io/badge/backend-FastAPI-009688)](#tech-stack)
@@ -32,9 +21,7 @@ verdict for each one.
 
 ![TruthLayer product walkthrough](truth-layers.gif)
 
-A quick look at the full pipeline — upload a PDF, watch live claim
-extraction and web search, and review the per-claim verdict dashboard
-with the corrected facts.
+A quick look at the full pipeline — upload a PDF or an image, watch live claim extraction and web search, and review the per-claim evidence-backed verdict dashboard.
 
 ---
 
@@ -42,9 +29,7 @@ with the corrected facts.
 
 **[https://truthlayernitish.vercel.app](https://truthlayernitish.vercel.app)**
 
-Open the URL in a browser, drop a PDF **or an image (PNG/JPG/WEBP)**
-on the upload zone, and watch the dashboard fill with per-claim
-verdicts in under a minute.
+Open the URL in a browser, drop a PDF **or an image (PNG/JPG/WEBP)** on the upload zone, and watch the dashboard fill with per-claim verdicts in under a minute.
 
 ---
 
@@ -75,15 +60,9 @@ verdicts in under a minute.
 
 ## Project Overview
 
-TruthLayer is an end-to-end fact-verification pipeline for documents
-and images. It reads the file, extracts every verifiable factual
-claim, retrieves live web evidence for each claim, and asks an LLM to
-render a verdict (`verified` / `inaccurate` / `false`) backed by
-source URLs.
+TruthLayer is an end-to-end fact-verification pipeline for documents and images. It reads the file, extracts every verifiable factual claim, retrieves live web evidence for each claim, and asks an LLM to render a verdict (`verified` / `inaccurate` / `false`) backed by source URLs.
 
-The result is a structured report — one verdict per claim — with
-plain-English explanations, the corrected fact (when applicable), and
-the source URLs that informed each judgement.
+The result is a structured report — one verdict per claim — with plain-English explanations, the corrected fact (when applicable), and the source URLs that informed each judgement.
 
 **The five-stage flow:**
 
@@ -94,12 +73,9 @@ PDF or Image  →  Claim Extraction  →  Evidence Search  →  AI Verification 
 
 TruthLayer is built for:
 
-- **Researchers and journalists** who need to audit long reports or
-  chart-heavy infographics quickly.
-- **Product, legal, and compliance teams** that want a second pair of
-  eyes on vendor / partner / market-research documents.
-- **Anyone** who has ever finished a 60-page PDF (or a screenshot
-  full of numbers) and wondered *"wait, is that actually true?"*
+- **Researchers and journalists** who need to audit long reports or chart-heavy infographics quickly.
+- **Product, legal, and compliance teams** that want a second pair of eyes on vendor / partner / market-research documents.
+- **Anyone** who has ever finished a 60-page PDF (or a screenshot full of numbers) and wondered *"wait, is that actually true?"*
 
 ---
 
@@ -123,6 +99,7 @@ TruthLayer is built for:
 ## Tech Stack
 
 ### Frontend
+
 - **React 18** — UI library
 - **Vite 5** — dev server and production build
 - **Tailwind CSS 3.5** — utility-first styling with a custom dark "Intelligence Terminal" design system
@@ -134,6 +111,7 @@ TruthLayer is built for:
 - **ErrorBoundary** — class-based global render-error trap
 
 ### Backend
+
 - **FastAPI 0.116** — async web framework
 - **Python 3.11+** — runtime
 - **PyMuPDF (≥1.24)** — PDF parsing
@@ -144,16 +122,15 @@ TruthLayer is built for:
 - **pytest 8.4** — 163 tests across unit, integration, stress, and regression
 
 ### AI
-- **NVIDIA Inference API** — Kimi K2.6 (`moonshotai/kimi-k2.6`) for
-  claim extraction (thinking on, PDF), vision claim extraction
-  (thinking on, image), and verdict evaluation (thinking off,
-  structured JSON).
+
+- **NVIDIA Inference API** — Kimi K2.6 (`moonshotai/kimi-k2.6`) for claim extraction (thinking on, PDF), vision claim extraction (thinking on, image), and verdict evaluation (thinking off, structured JSON).
 
 ### Search
-- **Tavily** — live web search, advanced depth, top-5 results, tier-ranked
-  by source quality.
+
+- **Tavily** — live web search, advanced depth, top-5 results, tier-ranked by source quality.
 
 ### Deployment
+
 - **Vercel** — frontend hosting (CI on push to `main`)
 - **Render** — backend hosting (free tier, single web worker)
 
@@ -184,16 +161,9 @@ graph TD
     style H fill:#0A0C0F,stroke:#22C55E,color:#F0F2F5
 ```
 
-The frontend never blocks on the pipeline: `POST /api/verify`
-(returns a `job_id` in <100 ms) and `POST /api/verify-image` both
-run as background tasks. The client polls
-`GET /api/verify/{job_id}` every 1.5 s for live progress updates
-and the final result, so a 60-second pipeline does not tie up the
-browser or trip a reverse-proxy HTTP timeout.
+The frontend never blocks on the pipeline: `POST /api/verify` (returns a `job_id` in <100 ms) and `POST /api/verify-image` both run as background tasks. The client polls `GET /api/verify/{job_id}` every 1.5 s for live progress updates and the final result, so a 60-second pipeline does not tie up the browser or trip a reverse-proxy HTTP timeout.
 
-The image path also uses vision for claim extraction, then drops
-into the same Tavily + LLM verdict pipeline as the PDF path —
-the `ResultsDashboard` is shared between both inputs.
+The image path also uses vision for claim extraction, then drops into the same Tavily + LLM verdict pipeline as the PDF path — the `ResultsDashboard` is shared between both inputs.
 
 ---
 
@@ -202,8 +172,7 @@ the `ResultsDashboard` is shared between both inputs.
 ### Prerequisites
 
 - **Python 3.11+** and **Node.js 18+**
-- API keys for [NVIDIA Inference](https://build.nvidia.com/) and
-  [Tavily](https://tavily.com/)
+- API keys for [NVIDIA Inference](https://build.nvidia.com/) and [Tavily](https://tavily.com/)
 
 ### 1. Clone the repository
 
@@ -227,8 +196,7 @@ cp .env.example .env       # then fill in NVIDIA_API_KEY and TAVILY_API_KEY
 uvicorn main:app --reload --port 8000
 ```
 
-Backend now serves on `http://localhost:8000`. Interactive docs at
-`http://localhost:8000/docs`. Try the health endpoint:
+Backend now serves on `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`. Try the health endpoint:
 
 ```bash
 curl http://localhost:8000/api/health
@@ -244,8 +212,7 @@ cp .env.example .env       # VITE_API_URL=http://localhost:8000
 npm run dev
 ```
 
-Frontend now serves on `http://localhost:5173` and talks to the
-backend automatically.
+Frontend now serves on `http://localhost:5173` and talks to the backend automatically.
 
 ### Environment Variables
 
@@ -270,17 +237,13 @@ backend automatically.
 |---|---|
 | `VITE_API_URL` | Backend base URL |
 
-> **Security:** `backend/.env` is git-ignored. Never commit real
-> keys. Startup validation will WARN about dummy or short keys in
-> the logs at boot — but the server still starts so the dashboard
-> can come up and report the issue.
+> **Security:** `backend/.env` is git-ignored. Never commit real keys. Startup validation will WARN about dummy or short keys in the logs at boot — but the server still starts so the dashboard can come up and report the issue.
 
 ---
 
 ## API Endpoints
 
-All endpoints are defined in `backend/routers/verify.py` and return
-typed Pydantic models from `backend/models/schemas.py`.
+All endpoints are defined in `backend/routers/verify.py` and return typed Pydantic models from `backend/models/schemas.py`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -296,20 +259,13 @@ typed Pydantic models from `backend/models/schemas.py`.
 | `POST` | `/api/verify-image` | **Pipeline: end-to-end verification for an image** (background-job) |
 | `GET`  | `/api/verify/{job_id}` | Poll a background verify job for status + result |
 
-`/api/verify` and `/api/verify-image` accept either multipart
-(`file=...`) or JSON (`{ "text": "...", "filename": "..." }`) and
-return `{ "job_id": "...", "status": "pending" }` in <100 ms. The
-client then polls `/api/verify/{job_id}` every 1.5 s until the
-status becomes `completed`, `partial`, or `failed`. The final
-payload includes `processing_time_seconds`, summary statistics, and
-per-claim `VerifiedClaim` records.
+`/api/verify` and `/api/verify-image` accept either multipart (`file=...`) or JSON (`{ "text": "...", "filename": "..." }`) and return `{ "job_id": "...", "status": "pending" }` in <100 ms. The client then polls `/api/verify/{job_id}` every 1.5 s until the status becomes `completed`, `partial`, or `failed`. The final payload includes `processing_time_seconds`, summary statistics, and per-claim `VerifiedClaim` records.
 
 ---
 
 ## Testing
-TruthLayer ships with **163 backend tests** (unit, integration,
-trap-dataset, stress) and **28 frontend tests** (vitest +
-@testing-library/react).
+
+TruthLayer ships with **163 backend tests** (unit, integration, trap-dataset, stress) and **28 frontend tests** (vitest + @testing-library/react).
 
 ```bash
 # Backend
@@ -335,11 +291,7 @@ npm test
 
 ### Trap dataset
 
-Drop adversarial PDFs/images into `test_assets/pdfs/` and
-`test_assets/images/`, record expected verdict counts in
-`test_assets/expected_results.json`, and the regression suite
-asserts the live pipeline stays within tolerance. See
-[`test_assets/README.md`](test_assets/README.md) for the schema.
+Drop adversarial PDFs/images into `test_assets/pdfs/` and `test_assets/images/`, record expected verdict counts in `test_assets/expected_results.json`, and the regression suite asserts the live pipeline stays within tolerance. See [`test_assets/README.md`](test_assets/README.md) for the schema.
 
 ---
 
@@ -349,36 +301,31 @@ asserts the live pipeline stays within tolerance. See
 
 ![Upload PDF](docs/screenshots/homepage.png)
 
-Drag-and-drop a PDF, in-browser validation, paginated text
-extraction.
+Drag-and-drop a PDF, in-browser validation, paginated text extraction.
 
 ### Upload — Image
 
 ![Upload Image](docs/screenshots/upload-image.png)
 
-Drop a chart, infographic, or screenshot. The file preview card
-shows the thumbnail, filename, and format badge.
+Drop a chart, infographic, or screenshot. The file preview card shows the thumbnail, filename, and format badge.
 
 ### Processing
 
 ![Processing](docs/screenshots/analyzing.png)
 
-The dynamic stepper shows PDF-specific or image-specific steps
-based on the uploaded file type.
+The dynamic stepper shows PDF-specific or image-specific steps based on the uploaded file type.
 
 ### Results
 
 ![Results](docs/screenshots/output.png)
 
-Per-claim verdicts with explanations, corrected facts, source
-URLs, and the wall-clock processing time.
+Per-claim verdicts with explanations, corrected facts, source URLs, and the wall-clock processing time.
 
 ### Evidence expanded
 
 ![Evidence](docs/screenshots/evidence.png)
 
-Each claim's evidence accordion shows the full source list with
-`rel="noopener noreferrer"` and `aria-expanded` for accessibility.
+Each claim's evidence accordion shows the full source list with `rel="noopener noreferrer"` and `aria-expanded` for accessibility.
 
 ### Verification Report
 
@@ -390,53 +337,35 @@ The structured verification report — shareable and print-ready.
 
 ![Error](docs/screenshots/error.png)
 
-Typed error envelope from the backend → user-friendly message
-on screen. The global ErrorBoundary catches render-time errors
-with a one-click reload.
+Typed error envelope from the backend → user-friendly message on screen. The global ErrorBoundary catches render-time errors with a one-click reload.
 
-> Full resolution originals are in
-> [`docs/screenshots/`](docs/screenshots/). Submission-grade
-> screenshots for reviewers live in [`demo/screenshots/`](demo/screenshots/)
-> (placeholders until you generate them locally).
+> Full resolution originals are in [`docs/screenshots/`](docs/screenshots/). Submission-grade screenshots for reviewers live in [`demo/screenshots/`](demo/screenshots/) (placeholders until you generate them locally).
 
 ---
 
 ## Demo Video
 
-A complete walkthrough of the product is in
-[`docs/demo/truth-layers.mp4`](docs/demo/truth-layers.mp4).
+A complete walkthrough of the product is in [`docs/demo/truth-layers.mp4`](docs/demo/truth-layers.mp4).
 
 The video covers:
 
 1. **Uploading a PDF** — drag-and-drop, validation, queued state.
-2. **Uploading an image** — chart or screenshot, vision-based
-   claim extraction.
-3. **Processing workflow** — the live stepper, status rotation,
-   and progress bar.
-4. **Results dashboard** — per-claim verdicts, summary counts,
-   evidence, processing time.
-5. **Export report** — opening the print-formatted verification
-   report.
+2. **Uploading an image** — chart or screenshot, vision-based claim extraction.
+3. **Processing workflow** — the live stepper, status rotation, and progress bar.
+4. **Results dashboard** — per-claim verdicts, summary counts, evidence, processing time.
+5. **Export report** — opening the print-formatted verification report.
 
 ---
 
 ## Future Improvements
 
-- **Streaming verification** — server-sent events so verdicts
-  appear claim-by-claim instead of waiting for the full pipeline
-  to finish.
-- **Multi-document analysis** — drop several PDFs at once and
-  compare claims across them.
+- **Streaming verification** — server-sent events so verdicts appear claim-by-claim instead of waiting for the full pipeline to finish.
+- **Multi-document analysis** — drop several PDFs at once and compare claims across them.
 - **Batch processing** — background queue for large document sets.
-- **Team collaboration** — shared workspaces, comments, and
-  verification history.
-- **Persistent history** — per-user dashboards of past runs
-  (currently in-memory; would need a database on Render).
-- **Source-tier visualisation** — diversity score and tier badges
-  on every evidence card.
-- **Pre-signed uploads** — push large files straight to object
-  storage to bypass the 30 s Render proxy timeout on the upload
-  step.
+- **Team collaboration** — shared workspaces, comments, and verification history.
+- **Persistent history** — per-user dashboards of past runs (currently in-memory; would need a database on Render).
+- **Source-tier visualisation** — diversity score and tier badges on every evidence card.
+- **Pre-signed uploads** — push large files straight to object storage to bypass the 30 s Render proxy timeout on the upload step.
 
 ---
 
@@ -444,10 +373,7 @@ The video covers:
 
 **Nitish Kumar**
 
-TruthLayer v2.0 — an AI-powered fact-verification platform that
-handles both long-form PDFs and chart-heavy images end-to-end,
-with claim extraction, live evidence search, and evidence-backed
-verdicts.
+TruthLayer v2.0 — an AI-powered fact-verification platform that handles both long-form PDFs and chart-heavy images end-to-end, with claim extraction, live evidence search, and evidence-backed verdicts.
 
 - Live: [truthlayernitish.vercel.app](https://truthlayernitish.vercel.app)
 - Repo: [github.com/nitish-niraj/truthlayer](https://github.com/nitish-niraj/truthlayer)
