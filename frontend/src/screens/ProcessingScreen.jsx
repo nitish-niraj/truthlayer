@@ -4,6 +4,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  Eye,
+  FileImage,
   FileSearch,
   FileText,
   Globe,
@@ -11,37 +13,67 @@ import {
   Sparkles,
 } from 'lucide-react'
 
-import { pollVerifyUntilDone, startVerify } from '../services/api'
+import { pollVerifyUntilDone, startVerify, describeNetworkError } from '../services/api'
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import { fadeIn, slideUp } from '../lib/motion'
 
-const STEPS = [
-  {
-    id: 'extract',
-    title: 'Extracting Text',
-    description: 'Reading document structure',
-    Icon: FileSearch,
-  },
-  {
-    id: 'claims',
-    title: 'Identifying Claims',
-    description: 'Finding verifiable facts and statistics',
-    Icon: Sparkles,
-  },
-  {
-    id: 'search',
-    title: 'Searching Live Sources',
-    description: 'Gathering evidence from trusted sources',
-    Icon: Globe,
-  },
-  {
-    id: 'verdicts',
-    title: 'Generating Verdicts',
-    description: 'Comparing evidence and assigning verdicts',
-    Icon: ShieldCheck,
-  },
-]
+const STEPS_BY_TYPE = {
+  pdf: [
+    {
+      id: 'extract',
+      title: 'Extracting Text',
+      description: 'Reading PDF structure and pulling all readable text.',
+      Icon: FileSearch,
+    },
+    {
+      id: 'claims',
+      title: 'Identifying Claims',
+      description: 'Finding verifiable facts and statistics.',
+      Icon: Sparkles,
+    },
+    {
+      id: 'search',
+      title: 'Searching Web',
+      description: 'Gathering evidence from trusted live sources.',
+      Icon: Globe,
+    },
+    {
+      id: 'verdicts',
+      title: 'Generating Verdicts',
+      description: 'Comparing evidence and assigning verdicts.',
+      Icon: ShieldCheck,
+    },
+  ],
+  image: [
+    {
+      id: 'analyze',
+      title: 'Analyzing Image',
+      description: 'Reading the image with vision to find every claim.',
+      Icon: Eye,
+    },
+    {
+      id: 'claims',
+      title: 'Extracting Claims',
+      description: 'Pulling verifiable facts and statistics from the image.',
+      Icon: Sparkles,
+    },
+    {
+      id: 'search',
+      title: 'Searching Web',
+      description: 'Gathering evidence from trusted live sources.',
+      Icon: Globe,
+    },
+    {
+      id: 'verdicts',
+      title: 'Generating Verdicts',
+      description: 'Comparing evidence and assigning verdicts.',
+      Icon: ShieldCheck,
+    },
+  ],
+}
+
+const FALLBACK_STEPS = STEPS_BY_TYPE.pdf
 
 const STEP_ADVANCE_MS = [2000, 3000, 4000]
 const PROGRESS_DURATION_MS = 45_000
@@ -49,30 +81,36 @@ const PROGRESS_TICK_MS = 100
 const MESSAGE_ROTATE_MS = 3500
 const LONG_HINT_MS = 30_000
 const COMPLETION_PAUSE_MS = 600
-// The polling loop in services/api.js bounds the total wait at 130s; the
-// progress bar now reflects that wider window so the user sees smooth
-// 0-100% movement instead of a stalled bar.
 const POLL_TIMEOUT_MS = 130_000
 
-const STATUS_MESSAGES = [
-  'Parsing PDF structure...',
-  'Extracting factual claims...',
-  'Searching trusted sources...',
-  'Comparing evidence...',
-  'Generating verdicts...',
-]
+const STATUS_MESSAGES = {
+  pdf: [
+    'Parsing PDF structure...',
+    'Extracting factual claims...',
+    'Searching trusted sources...',
+    'Comparing evidence...',
+    'Generating verdicts...',
+  ],
+  image: [
+    'Analyzing image with vision...',
+    'Extracting factual claims...',
+    'Searching trusted sources...',
+    'Comparing evidence...',
+    'Generating verdicts...',
+  ],
+}
 
+const DEFAULT_STATUS_MESSAGES = STATUS_MESSAGES.pdf
+
+// Per-claim timeout messages are specific to this screen (they refer to
+// the long-tail polling budget), so we override the generic timeout copy
+// from describeNetworkError with something that mentions "try a smaller
+// document" as a remediation hint.
 function getApiErrorMessage(err) {
   if (err?.code === 'ECONNABORTED') {
     return 'Analysis timed out. Please try again or use a smaller document.'
   }
-  if (err?.code === 'ERR_NETWORK') return 'Server unavailable'
-  if (err?.response?.status === 404) {
-    return 'The analysis job was lost (server restarted). Please upload again.'
-  }
-  if (err?.response?.data?.detail) return err.response.data.detail
-  if (err?.message) return err.message
-  return 'Unable to complete analysis.'
+  return describeNetworkError(err)
 }
 
 function stepState(index, activeStep, allComplete) {
@@ -84,10 +122,15 @@ function stepState(index, activeStep, allComplete) {
 
 export default function ProcessingScreen({
   uploadData,
+  fileType = 'pdf',
   onResults,
   onError,
   onCancel,
 }) {
+  const resolvedType = fileType === 'image' ? 'image' : 'pdf'
+  const STEPS = STEPS_BY_TYPE[resolvedType] ?? FALLBACK_STEPS
+  const TYPE_MESSAGES = STATUS_MESSAGES[resolvedType] ?? DEFAULT_STATUS_MESSAGES
+
   const [activeStep, setActiveStep] = useState(0)
   const [allComplete, setAllComplete] = useState(false)
   const [error, setError] = useState(null)
@@ -157,7 +200,7 @@ export default function ProcessingScreen({
       scheduleTimer(
         () => {
           if (cancelledRef.current) return
-          setMessageIndex((i) => (i + 1) % STATUS_MESSAGES.length)
+          setMessageIndex((i) => (i + 1) % TYPE_MESSAGES.length)
         },
         MESSAGE_ROTATE_MS,
         true
@@ -201,7 +244,7 @@ export default function ProcessingScreen({
           setActiveStep(STEPS.length - 1)
           setProgress(100)
           setShowLongHint(false)
-          setMessageIndex(STATUS_MESSAGES.length - 1)
+          setMessageIndex(TYPE_MESSAGES.length - 1)
           scheduleTimer(() => {
             if (cancelledRef.current) return
             onResults?.(data)
@@ -214,7 +257,7 @@ export default function ProcessingScreen({
           onError?.(message)
         })
     },
-    [uploadData, onResults, onError]
+    [uploadData, onResults, onError, STEPS, TYPE_MESSAGES]
   )
 
   useEffect(() => {
@@ -249,32 +292,58 @@ export default function ProcessingScreen({
 
   const filename = uploadData?.filename ?? 'document.pdf'
   const pages = uploadData?.pages
+  const HeaderFileIcon = resolvedType === 'image' ? FileImage : FileText
+  const headerTitle = resolvedType === 'image' ? 'Analyzing Image' : 'Analyzing Document'
+  const headerDescription =
+    resolvedType === 'image'
+      ? 'TruthLayer is reading the image, extracting claims, searching live sources, and generating fact-check verdicts.'
+      : 'TruthLayer is extracting claims, searching live sources, and generating fact-check verdicts.'
 
   return (
     <motion.div className="mx-auto w-full max-w-[650px]" {...slideUp}>
       {/* File header */}
       <div className="mb-8 flex items-center gap-3 font-mono text-sm text-text-secondary">
         <span className="flex h-9 w-9 items-center justify-center rounded-md border border-bg-border bg-bg-surface text-text-secondary">
-          <FileText className="h-4 w-4" aria-hidden />
+          <HeaderFileIcon className="h-4 w-4" aria-hidden />
         </span>
         <span className="truncate text-text-primary">{filename}</span>
         {pages ? (
           <span className="text-text-muted">&middot; {pages} pages</span>
         ) : null}
+        <span
+          data-testid="processing-file-type-badge"
+          className={[
+            'inline-flex items-center rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider',
+            resolvedType === 'image'
+              ? 'border-accent/30 bg-accent-dim text-accent'
+              : 'border-bg-border bg-bg-elevated text-text-secondary',
+          ].join(' ')}
+        >
+          {resolvedType === 'image' ? 'Image' : 'Document'}
+        </span>
       </div>
 
       <header className="mb-10 text-center">
-        <h1 className="font-display text-[28px] font-semibold tracking-tight text-text-primary sm:text-[32px]">
-          Analyzing Document
+        <h1
+          data-testid="processing-header-title"
+          className="font-display text-[28px] font-semibold tracking-tight text-text-primary sm:text-[32px]"
+        >
+          {headerTitle}
         </h1>
-        <p className="mx-auto mt-3 max-w-md text-sm text-text-secondary sm:text-base">
-          TruthLayer is extracting claims, searching live sources, and
-          generating fact-check verdicts.
+        <p
+          data-testid="processing-header-description"
+          className="mx-auto mt-3 max-w-md text-sm text-text-secondary sm:text-base"
+        >
+          {headerDescription}
         </p>
       </header>
 
       <Card>
-        <ul className="space-y-6">
+        <ul
+          data-testid="processing-steps"
+          data-file-type={resolvedType}
+          className="space-y-6"
+        >
           {STEPS.map((step, i) => {
             const state = stepState(i, activeStep, allComplete)
             const StepIcon = step.Icon
@@ -329,6 +398,8 @@ export default function ProcessingScreen({
                 </span>
                 <div>
                   <p
+                    data-testid="processing-step-title"
+                    data-step-id={step.id}
                     className={[
                       'font-display text-base font-semibold transition-colors',
                       state === 'waiting' && 'text-text-muted',
@@ -367,7 +438,7 @@ export default function ProcessingScreen({
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.2 }}
               >
-                {allComplete ? 'Analysis complete' : STATUS_MESSAGES[messageIndex]}
+                {allComplete ? 'Analysis complete' : TYPE_MESSAGES[messageIndex]}
               </motion.span>
             </AnimatePresence>
             <span>{Math.round(progress)}%</span>

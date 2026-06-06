@@ -186,7 +186,10 @@ def test_response_structure_matches_schema(monkeypatch):
 
     result = asyncio.run(verify_document("doc", "doc.pdf"))
 
-    assert set(result.model_dump().keys()) == {"filename", "summary", "claims"}
+    assert set(result.model_dump().keys()) == {"filename", "summary", "claims", "processing_time_seconds"}
+    # processing_time_seconds is set by the router layer, not by the
+    # pipeline itself. The pipeline must always leave it as None.
+    assert result.processing_time_seconds is None
     assert set(result.summary.model_dump().keys()) == {"total", "verified", "inaccurate", "false"}
     assert set(result.claims[0].model_dump().keys()) == {
         "id", "claim", "type", "source_sentence", "verdict", "explanation", "correct_fact", "source_url"

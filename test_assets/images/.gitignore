@@ -1,0 +1,6 @@
+# Real images may be large. Track small ones, ignore the rest.
+*.png
+*.jpg
+*.jpeg
+*.webp
+!README.md

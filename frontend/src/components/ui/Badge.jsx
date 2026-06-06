@@ -5,9 +5,15 @@ const VARIANTS = {
   neutral: 'bg-bg-elevated text-text-secondary border-bg-border',
 }
 
-export default function Badge({ children, variant = 'neutral', className = '' }) {
+export default function Badge({
+  children,
+  variant = 'neutral',
+  className = '',
+  ...rest
+}) {
   return (
     <span
+      {...rest}
       className={[
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[11px] uppercase tracking-wider',
         VARIANTS[variant] || VARIANTS.neutral,

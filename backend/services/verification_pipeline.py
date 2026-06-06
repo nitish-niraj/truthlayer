@@ -44,6 +44,12 @@ Phase 13 additions (background-job pattern):
   including the LLM extraction stage (which used to be unbounded).
 - ``extract_claims`` is now wrapped in ``asyncio.wait_for`` so a hung LLM
   call cannot stall the background task past the deadline.
+
+V2 Phase 3 additions (image verification reuse):
+- ``verify_single_claim`` and ``summarize_verified_claims`` are now public
+  primitives. The PDF pipeline still composes them internally, but the
+  image flow imports them directly so there is exactly one verification
+  engine in the codebase.
 """
 
 import asyncio
@@ -102,43 +108,44 @@ def _defensive_fallback_claim(claim: ExtractedClaim) -> VerifiedClaim:
     )
 
 
-async def _process_claim(
+async def verify_single_claim(
     claim: ExtractedClaim,
-    sem: asyncio.Semaphore,
-    metrics: RunMetrics,
+    metrics: Optional[RunMetrics] = None,
 ) -> VerifiedClaim:
-    """Run search + verdict for one claim, gated by the concurrency semaphore.
+    """Run search + verdict for a single claim. Public primitive.
+
+    This is the same per-claim logic the PDF pipeline runs; exposing it lets
+    other entry points (e.g. :mod:`services.image_verification_service`) reuse
+    the single verification engine without duplicating code.
 
     Wrapped in ``asyncio.wait_for`` so a single hung claim cannot exceed
     ``PER_CLAIM_TIMEOUT_SECONDS``. On timeout or any exception we emit a
-    defensive-fallback claim so the document-level response still ships.
-
-    ``search_claim_with_status`` is synchronous; we offload it to a thread so
-    that up to ``MAX_CONCURRENT_CLAIMS`` searches can be in flight
-    simultaneously. The cross-pipeline ``VERDICT_SEMAPHORE`` (in
-    ``core.rate_limit``) caps concurrent LLM calls separately.
+    defensive-fallback claim so the caller never has to handle exceptions
+    per claim. ``search_claim_with_status`` is synchronous and is offloaded to
+    a thread so it does not block the event loop. The cross-pipeline
+    ``VERDICT_SEMAPHORE`` (in :mod:`core.rate_limit`) caps concurrent LLM
+    calls separately and is acquired inside ``verdict_service``.
     """
     logger.info("CLAIM START | %s", claim.claim[:80])
     t0 = time.perf_counter()
     try:
-        async with sem:
-            try:
-                outcome = await asyncio.wait_for(
-                    asyncio.to_thread(search_claim_with_status, claim, metrics),
-                    timeout=PER_CLAIM_TIMEOUT_SECONDS,
-                )
-                verification = await asyncio.wait_for(
-                    generate_verdict(claim, outcome.results, outcome.status, metrics),
-                    timeout=PER_CLAIM_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "CLAIM TIMEOUT | %.1fs cap | %s",
-                    PER_CLAIM_TIMEOUT_SECONDS,
-                    claim.claim[:80],
-                )
-                metrics.llm_failures += 1
-                return _defensive_fallback_claim(claim)
+        outcome = await asyncio.wait_for(
+            asyncio.to_thread(search_claim_with_status, claim, metrics),
+            timeout=PER_CLAIM_TIMEOUT_SECONDS,
+        )
+        verification = await asyncio.wait_for(
+            generate_verdict(claim, outcome.results, outcome.status, metrics),
+            timeout=PER_CLAIM_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "CLAIM TIMEOUT | %.1fs cap | %s",
+            PER_CLAIM_TIMEOUT_SECONDS,
+            claim.claim[:80],
+        )
+        if metrics is not None:
+            metrics.llm_failures += 1
+        return _defensive_fallback_claim(claim)
     except Exception as exc:
         logger.warning("Pipeline error for claim '%s': %s", claim.claim[:60], exc)
         return _defensive_fallback_claim(claim)
@@ -162,13 +169,37 @@ async def _process_claim(
     )
 
 
-def _summary(claims: List[VerifiedClaim]) -> SummaryStats:
+# Backwards-compatible alias for the old internal name. The PDF pipeline used
+# to wrap this in an externally-supplied semaphore; the new
+# :func:`verify_single_claim` no longer needs a semaphore argument because the
+# cross-pipeline ``VERDICT_SEMAPHORE`` inside ``verdict_service`` is the
+# single source of truth for LLM concurrency. Kept as an alias so external
+# callers that still hold a reference don't break.
+async def _process_claim(
+    claim: ExtractedClaim,
+    sem: asyncio.Semaphore,  # noqa: ARG001 — kept for signature compatibility
+    metrics: RunMetrics,
+) -> VerifiedClaim:
+    return await verify_single_claim(claim, metrics)
+
+
+def summarize_verified_claims(claims: List[VerifiedClaim]) -> SummaryStats:
+    """Aggregate a list of ``VerifiedClaim`` into a ``SummaryStats``.
+
+    Public primitive so the image flow can reuse the same counts the PDF
+    pipeline emits. Renamed from the private ``_summary`` for V2 Phase 3.
+    """
     return SummaryStats(
         total=len(claims),
         verified=sum(1 for c in claims if c.verdict == VerdictType.verified),
         inaccurate=sum(1 for c in claims if c.verdict == VerdictType.inaccurate),
         false=sum(1 for c in claims if c.verdict == VerdictType.false),
     )
+
+
+# Internal alias so existing call sites in this module keep working without
+# a sprawling rename.
+_summary = summarize_verified_claims
 
 
 def _populate_summary_metrics(summary: SummaryStats, metrics: RunMetrics) -> None:
@@ -289,6 +320,9 @@ async def verify_document(
     )
     await _emit(progress_cb, stage="verification", claims=len(claims), concurrency=MAX_CONCURRENT_CLAIMS)
 
+    # Per-claim concurrency is gated by the cross-pipeline VERDICT_SEMAPHORE
+    # inside verdict_service; we still cap the in-flight task count at
+    # MAX_CONCURRENT_CLAIMS to bound memory + the per-claim wait_for budget.
     sem = asyncio.Semaphore(MAX_CONCURRENT_CLAIMS)
     tasks = [
         asyncio.create_task(_process_claim(c, sem, metrics), name=f"claim-{i}")

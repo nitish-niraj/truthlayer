@@ -77,10 +77,30 @@ const DEMO_RESULTS = {
 export default function App() {
   const [screen, setScreen] = useState('upload')
   const [uploadData, setUploadData] = useState(null)
+  const [fileType, setFileType] = useState(null)
+  const [fileSize, setFileSize] = useState(null)
+  const [previewUrl, setPreviewUrl] = useState(null)
   const [results, setResults] = useState(null)
   const [errorMessage, setErrorMessage] = useState(null)
   const [processingDurationMs, setProcessingDurationMs] = useState(null)
   const processingStartRef = useRef(null)
+
+  const revokePreview = (url) => {
+    if (url) URL.revokeObjectURL(url)
+  }
+
+  const handleFileAccepted = ({ file, type, url, size }) => {
+    if (previewUrl && previewUrl !== url) revokePreview(previewUrl)
+    setUploadData((prev) => {
+      if (file && type === 'pdf' && file?.name) {
+        return prev
+      }
+      return null
+    })
+    setFileType(type)
+    setFileSize(size ?? null)
+    setPreviewUrl(type === 'image' ? url : null)
+  }
 
   const handleUploadComplete = (data) => {
     setUploadData(data ?? null)
@@ -90,6 +110,15 @@ export default function App() {
     processingStartRef.current = Date.now()
     setProcessingDurationMs(null)
     setScreen('processing')
+  }
+
+  const handleImageVerified = (data) => {
+    if (processingStartRef.current) {
+      setProcessingDurationMs(Date.now() - processingStartRef.current)
+      processingStartRef.current = null
+    }
+    setResults(data ?? null)
+    setScreen('results')
   }
 
   const handleResults = (data) => {
@@ -119,6 +148,10 @@ export default function App() {
     setProcessingDurationMs(null)
     setErrorMessage(null)
     setUploadData(null)
+    revokePreview(previewUrl)
+    setPreviewUrl(null)
+    setFileType(null)
+    setFileSize(null)
     setResults(null)
     setScreen('upload')
   }
@@ -129,14 +162,19 @@ export default function App() {
         <motion.div key={screen} {...slideUp}>
           {screen === 'upload' && (
             <UploadScreen
+              fileType={fileType}
+              previewUrl={previewUrl}
+              onFileAccepted={handleFileAccepted}
               onUploadComplete={handleUploadComplete}
               onStartProcessing={handleStartProcessing}
+              onImageVerified={handleImageVerified}
               onError={handleError}
             />
           )}
           {screen === 'processing' && (
             <ProcessingScreen
               uploadData={uploadData}
+              fileType={fileType}
               onResults={handleResults}
               onError={handleError}
               onCancel={handleCancelProcessing}
@@ -147,6 +185,9 @@ export default function App() {
               results={results}
               onReset={onReset}
               processingDurationMs={processingDurationMs}
+              previewUrl={previewUrl}
+              fileType={fileType}
+              fileSize={fileSize}
             />
           )}
           {screen === 'error' && (

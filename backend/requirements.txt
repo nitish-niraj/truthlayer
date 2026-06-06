@@ -7,6 +7,7 @@ pydantic-settings==2.14.1
 openai==2.36.0
 tavily-python==0.7.24
 pymupdf>=1.24.10
+Pillow>=10.0.0
 
 # Testing
 pytest==8.4.2

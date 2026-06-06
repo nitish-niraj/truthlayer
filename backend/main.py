@@ -8,10 +8,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import settings
 from core.logger import logger
+from core.startup import run_startup_validation
 from routers.verify import router as verify_router
 from services.job_store import store as job_store
 
-app = FastAPI(title="TruthLayer API", description="Automated PDF fact-checking backend")
+app = FastAPI(title="TruthLayer API", description="Automated PDF + image fact-checking backend")
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +129,9 @@ async def favicon():
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def _startup() -> None:
+    # Validate env vars and numeric limits up front so a broken Render
+    # configuration is loud at boot, not silent at the first 503.
+    run_startup_validation()
     await job_store.start_sweeper()
     logger.info("APP STARTUP COMPLETE | FRONTEND_URL=%s", settings.FRONTEND_URL)
 

@@ -84,10 +84,35 @@ class UploadResponse(BaseModel):
     filename: str
 
 
+class ImageUploadResponse(BaseModel):
+    filename: str
+    file_type: str
+    mime_type: str
+    size_bytes: int
+
+
+class ImageClaimsResponse(BaseModel):
+    filename: str
+    claims: List[ExtractedClaim]
+
+
+class ImageVerificationResponse(BaseModel):
+    filename: str
+    summary: SummaryStats
+    claims: List[VerifiedClaim]
+    # Optional wall-clock duration of the full verification run, measured at
+    # the router layer. None when the timing is not available (e.g. legacy
+    # callers, mocked tests, or when the run aborted before completion).
+    processing_time_seconds: Optional[float] = None
+
+
 class VerifyResponse(BaseModel):
     filename: str
     summary: SummaryStats
     claims: List[VerifiedClaim]
+    # Optional wall-clock duration of the full verification run, measured at
+    # the router layer. None when the timing is not available.
+    processing_time_seconds: Optional[float] = None
 
 
 class ErrorResponse(BaseModel):

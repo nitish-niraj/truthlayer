@@ -1,0 +1,7 @@
+{
+  "_doc": "Expected verdict distribution for each trap / regression fixture. See test_assets/README.md for the schema and the tolerance used by the regression test. The _tolerance block (if present) overrides the default tolerance for individual fixtures.",
+  "_tolerance": {
+    "_default": { "max_total_drift": 2, "allow_extra_inaccurate": true }
+  },
+  "fixtures": {}
+}

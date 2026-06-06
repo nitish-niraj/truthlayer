@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str
     FRONTEND_URL: str = "http://localhost:5173"
     MAX_FILE_SIZE_MB: int = 10
+    MAX_IMAGE_SIZE_MB: int = 5
     MAX_CLAIMS: int = 20
     MAX_SEARCH_RESULTS: int = 5
     SEARCH_TIMEOUT_SECONDS: int = 8

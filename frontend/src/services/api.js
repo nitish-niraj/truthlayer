@@ -28,6 +28,66 @@ export async function uploadPDF(file) {
 }
 
 /**
+ * V2 Phase 1: validate an uploaded image and return its metadata.
+ * Supports PNG, JPG, JPEG, WEBP up to 5MB. The endpoint does NOT run OCR
+ * or vision analysis — it only confirms the file is a real, uncorrupted
+ * image in an allowed format.
+ */
+export async function uploadImage(file) {
+  if (!file) {
+    throw new Error('No file provided')
+  }
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post('/api/upload-image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return data // { filename, file_type, mime_type, size_bytes }
+}
+
+/**
+ * V2 Phase 2: send an image to Kimi K2.6 vision and get back the verifiable
+ * factual claims it can see. No web search, no verdict — just the claim
+ * list. The Vision API can take 10-30s on first call, so the timeout is
+ * generous.
+ */
+export async function extractImageClaims(file) {
+  if (!file) {
+    throw new Error('No file provided')
+  }
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post('/api/extract-image-claims', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 90_000,
+  })
+  return data // { filename, claims: ExtractedClaim[] }
+}
+
+/**
+ * V2 Phase 3: end-to-end image verification. Validates the image, extracts
+ * claims via Kimi Vision, then runs every claim through the SAME search +
+ * verdict engine the PDF pipeline uses. Returns the full report in the
+ * exact same shape as the PDF verify response so the ResultsDashboard
+ * can render either source without branching.
+ *
+ * Latency budget: 30-60s (vision + per-claim search + verdict). Timeout
+ * is set conservatively to survive Render free-tier cold start.
+ */
+export async function verifyImage(file) {
+  if (!file) {
+    throw new Error('No file provided')
+  }
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post('/api/verify-image', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120_000,
+  })
+  return data // { filename, summary, claims: VerifiedClaim[] }
+}
+
+/**
  * Start a background verification job. Returns immediately (<100ms) with a
  * job_id; the heavy work runs server-side and the client polls
  * getVerifyStatus(job_id) for progress and the final result.
@@ -124,4 +184,59 @@ export async function pollVerifyUntilDone(job_id, {
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
+}
+
+/**
+ * V2 Phase 5: translate a thrown error from one of the verify/upload/extract
+ * calls into a user-facing string the ErrorScreen can render directly.
+ *
+ * Distinguishes between:
+ *   - "You appear to be offline" (navigator.onLine === false)
+ *   - "Server unavailable" (network error with no response)
+ *   - "Server timed out" (axios code === 'ECONNABORTED')
+ *   - HTTP error envelopes from the backend ({ detail, error })
+ *   - Anything else: the raw error.message
+ *
+ * Keeps the messaging short and actionable — the ErrorScreen adds the
+ * "Retry" CTA on top, so we don't have to prompt the user to retry here.
+ */
+export function describeNetworkError(err) {
+  // Offline is the most common cause of "Failed to fetch" on laptops and
+  // a clean, user-friendly first guess.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return "You're offline. Reconnect to the internet and try again."
+  }
+  const status = err?.response?.status
+  const data = err?.response?.data
+  // Backend error envelope (FastAPI HTTPException detail).
+  if (data && typeof data === 'object') {
+    if (typeof data.detail === 'string' && data.detail) {
+      return data.detail
+    }
+    if (typeof data.detail === 'object' && data.detail !== null) {
+      const detailObj = data.detail
+      if (typeof detailObj.detail === 'string' && detailObj.detail) {
+        return detailObj.detail
+      }
+    }
+    if (typeof data.error === 'string' && data.error && data.detail) {
+      return String(data.detail)
+    }
+  }
+  // Axios timeout.
+  if (err?.code === 'ECONNABORTED') {
+    return 'The server took too long to respond. Please try again.'
+  }
+  // Network error: server down, CORS, DNS, etc. axios throws with no
+  // response attached.
+  if (err?.request && !err?.response) {
+    return 'The verification server is unavailable. Please try again in a moment.'
+  }
+  if (typeof status === 'number' && status >= 500) {
+    return 'The verification server hit an unexpected error. Please try again.'
+  }
+  if (err?.message) {
+    return String(err.message)
+  }
+  return 'Something went wrong. Please try again.'
 }

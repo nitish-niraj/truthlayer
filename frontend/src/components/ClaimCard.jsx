@@ -1,11 +1,11 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ExternalLink,
   XCircle,
 } from 'lucide-react'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
+import EvidencePanel from './EvidencePanel'
 
 const VERDICT_META = {
   verified: {
@@ -36,6 +36,7 @@ export default function ClaimCard({ claim }) {
   const showCorrectFact =
     claim.verdict !== 'verified' && claim.correct_fact && claim.correct_fact.trim().length > 0
   const showSource = claim.source_url && claim.source_url.trim().length > 0
+  const hasEvidencePanel = showCorrectFact || showSource
 
   return (
     <Card className={`!p-6 border-l-4 ${meta.leftBorder}`}>
@@ -67,28 +68,7 @@ export default function ClaimCard({ claim }) {
         </p>
       ) : null}
 
-      {showCorrectFact ? (
-        <div className="mt-4 rounded-md border-l-2 border-accent bg-accent-dim/30 py-2.5 pl-4 pr-3">
-          <p className="font-mono text-[11px] uppercase tracking-wider text-text-muted">
-            Correct fact
-          </p>
-          <p className="mt-1 break-words text-sm text-text-primary">
-            {claim.correct_fact}
-          </p>
-        </div>
-      ) : null}
-
-      {showSource ? (
-        <a
-          href={claim.source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-4 inline-flex items-center gap-1.5 text-sm text-accent transition-colors hover:text-accent-hover"
-        >
-          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-          Source
-        </a>
-      ) : null}
+      {hasEvidencePanel ? <EvidencePanel claim={claim} /> : null}
     </Card>
   )
 }

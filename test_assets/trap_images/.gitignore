@@ -1,0 +1,6 @@
+# Trap fixtures may be large binary files. Track small ones, ignore the rest.
+*.png
+*.jpg
+*.jpeg
+*.webp
+!README.md

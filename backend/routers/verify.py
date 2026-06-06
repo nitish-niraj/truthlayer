@@ -1,5 +1,10 @@
+import time
+
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
+from core.config import settings
+from core.llm_client import BASE_URL, get_llm_client
+from core.logger import logger
 from models.schemas import (
     ClaimEvidence,
     ClaimVerification,
@@ -7,6 +12,9 @@ from models.schemas import (
     ExtractedClaim,
     ExtractClaimsRequest,
     GenerateVerdictRequest,
+    ImageClaimsResponse,
+    ImageUploadResponse,
+    ImageVerificationResponse,
     UploadResponse,
     VerifyClaimResponse,
     VerifyRequest,
@@ -14,6 +22,15 @@ from models.schemas import (
 )
 from services import job_store
 from services.claim_service import extract_claims
+from services.image_claim_service import (
+    VisionServiceError,
+    extract_claims_from_image,
+)
+from services.image_service import validate_image_contents, validate_image_upload
+from services.image_verification_service import (
+    summarize as summarize_image_verdicts,
+    verify_image_claims,
+)
 from services.job_store import JobStatus, store as job_store_singleton
 from services.pdf_service import extract_text_from_pdf
 from services.search_service import search_claim
@@ -22,10 +39,58 @@ from services.verification_pipeline import verify_document
 
 router = APIRouter(prefix="/api")
 
+API_VERSION = "2.0"
+
+
+def _llm_configured() -> bool:
+    """True iff the NVIDIA API key is present and the LLM client can be
+    instantiated. We do NOT issue a real LLM call from the health probe —
+    health checks must always be sub-100ms.
+    """
+    key = (settings.NVIDIA_API_KEY or "").strip()
+    if not key or key == "test-nvidia-key":
+        return False
+    try:
+        client = get_llm_client()
+        return client is not None
+    except Exception as exc:
+        logger.warning("LLM client construction failed during health check: %s", exc)
+        return False
+
+
+def _tavily_configured() -> bool:
+    key = (settings.TAVILY_API_KEY or "").strip()
+    if not key or key == "test-tavily-key":
+        return False
+    # Tavily is invoked from search_service; if the import works and the
+    # key looks plausible, mark it available. We do NOT make a real call.
+    try:
+        from tavily import TavilyClient  # type: ignore
+        return True
+    except Exception:
+        return False
+
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.0"}
+    """Liveness + dependency status.
+
+    Returns the configured/unconfigured state of every downstream service so a
+    monitoring tool can flag a degraded environment without making a real API
+    call. Always returns 200 so the service still serves traffic when an
+    optional dependency is missing — the dependency flags are advisory.
+    """
+    vision_ok = _llm_configured()
+    search_ok = _tavily_configured()
+    status = "ok" if (vision_ok and search_ok) else "degraded"
+    return {
+        "status": status,
+        "version": API_VERSION,
+        "vision": "available" if vision_ok else "unconfigured",
+        "search": "available" if search_ok else "unconfigured",
+        "model": "moonshotai/kimi-k2.6",
+        "base_url": BASE_URL,
+    }
 
 
 @router.post(
@@ -47,6 +112,111 @@ async def health():
 )
 async def upload_file(file: UploadFile = File(...)):
     return await extract_text_from_pdf(file)
+
+
+@router.post(
+    "/upload-image",
+    response_model=ImageUploadResponse,
+    summary="Upload an image and return its metadata (V2 Phase 1)",
+    description=(
+        "Accepts a multipart/form-data upload of an image file (PNG, JPG, "
+        "JPEG, or WEBP), validates the format, size, and integrity, and "
+        "returns basic metadata. Phase 1 only — no OCR, no vision, no "
+        "claim extraction. Up to 5MB."
+    ),
+    responses={
+        200: {"description": "Image validated successfully"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Unsupported format or corrupted image",
+        },
+        413: {"model": ErrorResponse, "description": "Image exceeds MAX_IMAGE_SIZE_MB"},
+    },
+)
+async def upload_image(file: UploadFile = File(...)):
+    return await validate_image_upload(file)
+
+
+@router.post(
+    "/extract-image-claims",
+    response_model=ImageClaimsResponse,
+    summary="Extract verifiable factual claims from an image (V2 Phase 2)",
+    description=(
+        "Accepts a multipart/form-data upload of an image file (PNG, JPG, "
+        "JPEG, or WEBP), validates it, and asks Kimi K2.6 vision to extract "
+        "every verifiable factual claim visible in the image. Returns the "
+        "extracted claims in the same ``ExtractedClaim`` shape used by the "
+        "text-based claim extractor. No web search, no verdict generation. "
+        "Up to 5MB."
+    ),
+    responses={
+        200: {"description": "Claims extracted (possibly empty list)"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Unsupported format or corrupted image",
+        },
+        413: {"model": ErrorResponse, "description": "Image exceeds MAX_IMAGE_SIZE_MB"},
+        503: {"model": ErrorResponse, "description": "Vision service unavailable"},
+    },
+)
+async def extract_image_claims(file: UploadFile = File(...)):
+    contents = await file.read()
+    meta = validate_image_contents(contents, file.filename, file.content_type)
+    try:
+        claims = await extract_claims_from_image(
+            contents, meta.filename, meta.mime_type
+        )
+    except VisionServiceError as exc:
+        logger.error("Vision service unavailable for %s: %s", file.filename, exc)
+        raise HTTPException(status_code=503, detail="Vision service unavailable")
+    return ImageClaimsResponse(filename=meta.filename, claims=claims)
+
+
+@router.post(
+    "/verify-image",
+    response_model=ImageVerificationResponse,
+    summary="Verify every claim extracted from an image (V2 Phase 3)",
+    description=(
+        "Accepts a multipart/form-data upload of an image file (PNG, JPG, "
+        "JPEG, or WEBP), validates it, extracts verifiable factual claims "
+        "with Kimi Vision, then runs every claim through the same search + "
+        "verdict pipeline used for PDFs. Returns the full report in the "
+        "shape of ``ImageVerificationResponse``. No new verification engine — "
+        "the image flow reuses ``search_service``, ``verdict_service``, and "
+        "the ``verify_single_claim`` primitive from ``verification_pipeline``. "
+        "Up to 5MB."
+    ),
+    responses={
+        200: {"description": "Verification report (summary + per-claim verdicts)"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Unsupported format or corrupted image",
+        },
+        413: {"model": ErrorResponse, "description": "Image exceeds MAX_IMAGE_SIZE_MB"},
+        503: {"model": ErrorResponse, "description": "Vision service unavailable"},
+    },
+)
+async def verify_image(file: UploadFile = File(...)):
+    contents = await file.read()
+    meta = validate_image_contents(contents, file.filename, file.content_type)
+    t0 = time.perf_counter()
+    try:
+        claims = await extract_claims_from_image(
+            contents, meta.filename, meta.mime_type
+        )
+    except VisionServiceError as exc:
+        logger.error("Vision service unavailable for %s: %s", file.filename, exc)
+        raise HTTPException(status_code=503, detail="Vision service unavailable")
+
+    verified = await verify_image_claims(claims)
+    summary = summarize_image_verdicts(verified)
+    elapsed = round(time.perf_counter() - t0, 3)
+    return ImageVerificationResponse(
+        filename=meta.filename,
+        summary=summary,
+        claims=verified,
+        processing_time_seconds=elapsed,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +299,17 @@ async def _run_verify_job(job_id: str, text: str, filename: str) -> None:
         job_store_singleton.update_progress(job_id, **fields)
 
     try:
+        t0 = time.perf_counter()
         result = await verify_document(
             text=text,
             filename=filename,
             hard_timeout=JOB_VERIFY_WALL_BUDGET_SECONDS,
             progress_cb=_progress,
         )
+        result.processing_time_seconds = round(time.perf_counter() - t0, 3)
+        result_dict = result.model_dump()
         if result.summary.total == 0:
-            job_store_singleton.mark_completed(job_id, result.model_dump())
+            job_store_singleton.mark_completed(job_id, result_dict)
         else:
             # Treat any zero-claim-result or budget-exceeded as partial. The
             # pipeline itself signals partial via the per-claim explanation
@@ -145,9 +318,9 @@ async def _run_verify_job(job_id: str, text: str, filename: str) -> None:
             from services.verification_pipeline import PARTIAL_RESULT_NOTE
             is_partial = any(PARTIAL_RESULT_NOTE in (c.explanation or "") for c in result.claims)
             if is_partial:
-                job_store_singleton.mark_partial(job_id, result.model_dump())
+                job_store_singleton.mark_partial(job_id, result_dict)
             else:
-                job_store_singleton.mark_completed(job_id, result.model_dump())
+                job_store_singleton.mark_completed(job_id, result_dict)
     except Exception as exc:  # defensive — verify_document already swallows
         logger.exception("Background verify job %s crashed: %s", job_id, exc)
         job_store_singleton.mark_failed(job_id, str(exc))
@@ -180,7 +353,10 @@ async def _run_verify_job(job_id: str, text: str, filename: str) -> None:
 async def verify_sync(req: VerifyRequest):
     if not req.text:
         raise HTTPException(status_code=400, detail="`text` is required")
-    return await verify_document(req.text, req.filename)
+    t0 = time.perf_counter()
+    result = await verify_document(req.text, req.filename)
+    result.processing_time_seconds = round(time.perf_counter() - t0, 3)
+    return result
 
 
 @router.post(

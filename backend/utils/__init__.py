@@ -1,1 +1,1 @@
-"""Utility package for backend."""
+"""Utils package."""

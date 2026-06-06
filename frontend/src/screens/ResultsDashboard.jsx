@@ -1,12 +1,22 @@
 import { useState } from 'react'
-import { motion } from 'framer-motion'
-import { Eye, FileSearch, FileText, Printer, Search } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  Eye,
+  FileImage,
+  FileSearch,
+  FileText,
+  Image as ImageIcon,
+  Printer,
+  Search,
+} from 'lucide-react'
 
 import Card from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import EmptyState from '../components/ui/EmptyState'
 import ClaimCard from '../components/ClaimCard'
 import SummaryBar from '../components/SummaryBar'
+import FilePreviewCard from '../components/FilePreviewCard'
+import ResultMetadataCard from '../components/ResultMetadataCard'
 import { fadeIn, slideUp } from '../lib/motion'
 import { openReport } from '../utils/reportGenerator'
 
@@ -15,6 +25,15 @@ const SUMMARY_CARDS = [
   { id: 'inaccurate', label: 'Inaccurate', color: 'text-inaccurate', numClass: 'text-inaccurate' },
   { id: 'false', label: 'False', color: 'text-false', numClass: 'text-false' },
 ]
+
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg']
+
+function detectInputType(filename, explicitType) {
+  if (explicitType === 'image' || explicitType === 'document') return explicitType
+  if (!filename) return 'document'
+  const ext = filename.toLowerCase().split('.').pop()
+  return IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'document'
+}
 
 const cardVariants = {
   initial: { opacity: 0, y: 16 },
@@ -30,22 +49,6 @@ const listVariants = {
   animate: {
     transition: { staggerChildren: 0.08, delayChildren: 0.2 },
   },
-}
-
-function FileInfoRow({ filename, total }) {
-  return (
-    <div className="flex items-center gap-3 font-mono text-sm text-text-secondary">
-      <span className="flex h-9 w-9 items-center justify-center rounded-md border border-bg-border bg-bg-surface text-text-secondary">
-        <FileText className="h-4 w-4" aria-hidden />
-      </span>
-      <span className="truncate text-text-primary">{filename ?? 'document.pdf'}</span>
-      {typeof total === 'number' ? (
-        <span className="text-text-muted">
-          &middot; {total} claim{total === 1 ? '' : 's'} analyzed
-        </span>
-      ) : null}
-    </div>
-  )
 }
 
 function SummaryNumbers({ summary }) {
@@ -92,7 +95,63 @@ function Divider({ label }) {
   )
 }
 
-export default function ResultsDashboard({ results, onReset, processingDurationMs = null }) {
+const EMPTY_IMAGE_HINTS = [
+  'Statistics screenshots',
+  'News snippets',
+  'Charts',
+  'Infographics',
+  'Social media posts',
+]
+
+function ImageEmptyState() {
+  return (
+    <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full border border-bg-border bg-bg-elevated text-text-secondary">
+        <ImageIcon className="h-6 w-6" aria-hidden />
+      </div>
+      <h2 className="font-display text-lg font-semibold text-text-primary">
+        No verifiable claims detected
+      </h2>
+      <p className="mt-2 max-w-sm text-sm text-text-secondary">
+        TruthLayer could not identify any factual claims in this image.
+      </p>
+      <p className="mt-5 font-mono text-[11px] uppercase tracking-[0.18em] text-text-muted">
+        Try uploading
+      </p>
+      <ul className="mt-3 flex flex-wrap justify-center gap-2">
+        {EMPTY_IMAGE_HINTS.map((hint) => (
+          <li
+            key={hint}
+            className="inline-flex items-center rounded-full border border-bg-border bg-bg-surface px-3 py-1 font-mono text-[11px] uppercase tracking-wider text-text-secondary"
+          >
+            {hint}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function DocumentEmptyState() {
+  return (
+    <EmptyState
+      icon={<FileSearch className="h-6 w-6" aria-hidden />}
+      title="No verifiable claims found"
+      description="TruthLayer could not identify any factual claims in this document."
+    />
+  )
+}
+
+export default function ResultsDashboard({
+  results,
+  onReset,
+  processingDurationMs = null,
+  processingTimeSeconds = null,
+  previewUrl = null,
+  fileType = null,
+  fileSize = null,
+  pages = null,
+}) {
   const [reportNotice, setReportNotice] = useState(null)
 
   const handleViewReport = () => {
@@ -129,11 +188,34 @@ export default function ResultsDashboard({ results, onReset, processingDurationM
   const summary = results.summary ?? {}
   const claims = Array.isArray(results.claims) ? results.claims : []
   const total = summary?.total ?? claims.length
+  const inputType = detectInputType(results.filename, fileType)
+  const resetLabel =
+    inputType === 'image' ? 'Verify Another Image' : 'Analyze Another Document'
+
+  const metadataProcessingSeconds =
+    processingTimeSeconds ??
+    (typeof processingDurationMs === 'number' ? processingDurationMs / 1000 : null)
 
   return (
-    <motion.div className="mx-auto w-full max-w-[860px] space-y-10" {...slideUp}>
+    <motion.div className="mx-auto w-full max-w-[860px] space-y-8" {...slideUp}>
+      {inputType === 'image' ? (
+        <FilePreviewCard
+          filename={results.filename}
+          fileType={inputType}
+          previewUrl={previewUrl}
+          fileSize={fileSize}
+        />
+      ) : null}
+
       <motion.div {...fadeIn}>
-        <FileInfoRow filename={results.filename} total={total} />
+        <ResultMetadataCard
+          filename={results.filename}
+          fileType={inputType}
+          summary={summary}
+          processingDurationMs={processingDurationMs}
+          processingTimeSeconds={metadataProcessingSeconds}
+          totalClaims={total}
+        />
       </motion.div>
 
       <SummaryNumbers summary={summary} />
@@ -154,28 +236,36 @@ export default function ResultsDashboard({ results, onReset, processingDurationM
         <Divider label="Claim Analysis" />
       </motion.div>
 
-      {claims.length > 0 ? (
-        <motion.ul
-          className="space-y-4"
-          variants={listVariants}
-          initial="initial"
-          animate="animate"
-        >
-          {claims.map((claim) => (
-            <motion.li key={claim.id} variants={cardVariants}>
-              <ClaimCard claim={claim} />
-            </motion.li>
-          ))}
-        </motion.ul>
-      ) : (
-        <Card>
-          <EmptyState
-            icon={<Search className="h-6 w-6" aria-hidden />}
-            title="No verifiable claims found"
-            description="TruthLayer could not identify any factual claims in this document."
-          />
-        </Card>
-      )}
+      <AnimatePresence mode="wait">
+        {claims.length > 0 ? (
+          <motion.ul
+            key="claims"
+            className="space-y-4"
+            variants={listVariants}
+            initial="initial"
+            animate="animate"
+            exit={{ opacity: 0 }}
+          >
+            {claims.map((claim) => (
+              <motion.li key={claim.id} variants={cardVariants}>
+                <ClaimCard claim={claim} />
+              </motion.li>
+            ))}
+          </motion.ul>
+        ) : (
+          <motion.div
+            key="empty"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <Card>
+              {inputType === 'image' ? <ImageEmptyState /> : <DocumentEmptyState />}
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <motion.div
         className="flex flex-col items-center gap-3 pt-4"
@@ -205,7 +295,7 @@ export default function ResultsDashboard({ results, onReset, processingDurationM
             onClick={onReset}
             className="uppercase tracking-wider"
           >
-            Analyze Another Document
+            {resetLabel}
           </Button>
         </div>
         {reportNotice ? (
